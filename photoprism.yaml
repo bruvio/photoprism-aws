@@ -3,15 +3,18 @@ Description: An example CloudFormation template to deploy PhotoPrism on ECS Farg
 Parameters:
   VPC:
     Type: AWS::EC2::VPC::Id
+    Default: vpc-xxx
   Subnet1:
     Type: AWS::EC2::Subnet::Id
+    Default: subnet-xxx
   Subnet2:
     Type: AWS::EC2::Subnet::Id
+    Default: subnet-xxx
 # uncomment to allow HTTPS instead of HTTP
-#  Certificate:
-#    Type: String
-#    # Update with the certificate ARN from Certificate Manager, which must exist in the same region.
-#    Default: 'arn:aws:acm:region:123456789010:certificate/00000000-0000-0000-0000-000000000000'
+  Certificate:
+    Type: String
+    # Update with the certificate ARN from Certificate Manager, which must exist in the same region.
+    Default: arn:aws:acm:us-east-1:xxxxx:certificate/xxxxx-xxxx-xxx-xxx-xxx
   Image:
     Type: String
     Default: photoprism/photoprism:latest
@@ -23,7 +26,7 @@ Parameters:
     Default: 2342
   LoadBalancerPort:
     Type: Number
-    Default: 80 # change to 443 for HTTPS
+    Default: 443 # change to 443 for HTTPS
   DatabaseName:
     Type: String
     Default: photoprism
@@ -39,12 +42,12 @@ Parameters:
   HealthCheckPath:
     Type: String
     Default: /
-#  HostedZoneName:
-#    Type: String
-#    Default: company.com
-#  Subdomain:
-#    Type: String
-#    Default: Photoprismservice
+  HostedZoneName:
+    Type: String
+    Default: myzone.my
+  Subdomain:
+    Type: String
+    Default: photo
   MinContainers:
     Type: Number
     Default: 1
@@ -237,14 +240,20 @@ Resources:
       GroupDescription: !Join ['', [!Ref ServiceName, LoadBalancerSecurityGroup]]
       VpcId: !Ref VPC
       SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: !Ref LoadBalancerPort
-          ToPort: !Ref LoadBalancerPort
-          CidrIp: 0.0.0.0/0
+          - IpProtocol: tcp
+            FromPort: 80
+            ToPort: 80
+            CidrIp: 0.0.0.0/0
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: 0.0.0.0/0
+            
+
   Service:
     Type: AWS::ECS::Service
     DependsOn:
-      - ListenerHTTP
+      - HTTPSlistener
     Properties:
       ServiceName: !Ref ServiceName
       Cluster: !Ref Cluster
@@ -288,7 +297,7 @@ Resources:
           Value: true
       TargetType: ip
       VpcId: !Ref VPC
-  ListenerHTTP:
+  HTTPSlistener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       DefaultActions:
@@ -296,10 +305,27 @@ Resources:
           Type: forward
       LoadBalancerArn: !Ref LoadBalancer
       Port: !Ref LoadBalancerPort
-      Protocol: HTTP
-#      Protocol: HTTPS
-#      Certificates:
-#        - CertificateArn: !Ref Certificate
+      Protocol: HTTPS
+      SslPolicy: "ELBSecurityPolicy-2016-08"
+      Certificates:
+        - CertificateArn: !Ref Certificate
+  HTTPlistener:
+      Type: "AWS::ElasticLoadBalancingV2::Listener"
+      Properties:
+          DefaultActions:
+          - Type: "redirect"
+            RedirectConfig:
+              Protocol: "HTTPS"
+              Port: !Ref LoadBalancerPort
+              Host: "#{host}"
+              Path: "/#{path}"
+              Query: "#{query}"
+              StatusCode: "HTTP_301"
+          LoadBalancerArn: !Ref LoadBalancer
+          Port: 80
+          Protocol: "HTTP"
+
+
   LoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -314,15 +340,17 @@ Resources:
       Subnets:
         - !Ref Subnet1
         - !Ref Subnet2
-#  DNSRecord:
-#    Type: AWS::Route53::RecordSet
-#    Properties:
-#      HostedZoneName: !Join ['', [!Ref HostedZoneName, .]]
-#      Name: !Join ['', [!Ref Subdomain, ., !Ref HostedZoneName, .]]
-#      Type: A
-#      AliasTarget:
-#        DNSName: !GetAtt LoadBalancer.DNSName
-#        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+  DNSRecord:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName: !Join ['', [!Ref HostedZoneName, .]]
+      RecordSets:
+      - Name:  !Join ['', [!Ref Subdomain, ., !Ref HostedZoneName, .]]
+        Type: CNAME
+        TTL: '300'
+        ResourceRecords:
+        - !GetAtt 'LoadBalancer.DNSName'
+
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -459,6 +487,6 @@ Outputs:
   LoadBalancerUrl:
     Description: The URL of the loadbalancer
     Value: !GetAtt LoadBalancer.DNSName
-#  Endpoint:
-#    Description: Endpoint
-#    Value: !Join ['', ['https://', !Ref DNSRecord]]
+  Endpoint:
+    Description: Endpoint
+    Value: !Join ['', ['https://',!Ref Subdomain, ., !Ref HostedZoneName, .]]
